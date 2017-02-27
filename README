@@ -1,0 +1,11 @@
+
+Analysis code for comparison of gene essentiality metrics.
+
+1. Copy the jdistlib jar file to `lib/` (http://jdistlib.sourceforge.net/).
+2. Fetch and place the source data files in this folder (see `src/main/scsala/runner.scala L16`). Source data is detailed in the Supplementary Tables.
+3. `sbt run` (to install sbt see http://www.scala-sbt.org/ , you might need java8)
+
+Folder layout:
+- `src/main/scala/runner.scala`: main analysis elements
+- `src/main/scala/`: helpers for plotting and some statistical tests.
+- `nspl/`: plotting library dependency, distributed as source.
