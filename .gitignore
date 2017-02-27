@@ -7,7 +7,6 @@ lofs.exac.tsv
 *csv
 *pdf
 *png
-*txt
 *fasta
 *xlsx
 9606.protein.links.v10.gz
@@ -21,3 +20,21 @@ lib/jdistlib-0.4.5-bin.jar
 *ai
 cytoscape1.svg
 NM_001101376
+core.txt
+ensemble_biomart_paralog_counts.txt
+enstensg.txt
+heptaVar_1KG_phase3_hg38_max90percMissing_N2504_hchli_count_score.txt
+HMD_HumanPhenotype.rpt.txt
+loftool_fadista.csv.txt
+MGI_GenePheno.rpt.txt
+MGI_PhenotypicAllele.rpt.txt
+missingsymbols.txt
+my_go.txt
+nature04240-s2.txt
+nature19057-SI Table 13.csv.txt
+non_alt_loci_set.txt
+RVIS_Unpublished_ExAC_May2015.txt
+sets.txt
+sets2.txt
+VOC_MammalianPhenotype.rpt.txt
+newestimation.absolute.posteriors.txt
