@@ -9,10 +9,13 @@ import org.saddle.linalg._
 import OverRep._
 
 object Runner {
+
+  /** All the analysis for the paper is described in this single method
+    */
   def run = {
     import Helpers._
 
-    // val phiFile = "exac_phi.txt"
+    /* Input files used. */
     val originalPhiFile = "newestimation.absolute.posteriors.txt"
     val loftoolFile = "loftool_fadista.csv.txt"
     val exacFile = "nature19057-SI Table 13.csv.txt"
@@ -32,6 +35,7 @@ object Runner {
     val pathogenicVariantsFile =
       "pathogenic_2016_07_R1_SNVs_noBenign_withInDel_uniqPos_insideENSTmatchedFromHg19.bed"
 
+    /* Parse the ExAC vcf file and extract lof variants. */
     // openSource(exacVCF) { s =>
     //   openFileWriter(new java.io.File("lofs.exac.tsv")) { writer =>
     //     readLofs(s).foreach { c =>
@@ -44,14 +48,19 @@ object Runner {
     val keggH = readKeggHierarchy(keggHierarchyFile)
 
     val hgncTable = readHGNCTable(hgncFile)
+
+    /* ENSG -> Gene Symbol map */
     val ensg2symbol =
       readEnsembleFile(ensembleFile).map(x => x._1 -> x._3).toMap
 
+    /* ENSG -> Gene description map */
     val unknowngenes =
       readEnsembleFile(geneDescriptions).map(x => x._1 -> x._3).toMap
 
+    /* Gene Symbol -> ENSG map */
     val symbol2ensg = ensg2symbol.map(_.swap)
 
+    /* Add some extra symbols  */
     val symbol2ensgBoth = symbol2ensg ++ Map(
         "CCL4L2" -> "ENSG00000276125",
         "ABP1" -> "ENSG00000002726",
@@ -63,8 +72,11 @@ object Runner {
         "SGK223" -> "ENSG00000275342",
         "SGK494" -> "ENSG00000167524"
       )
-    val ensg = readEnsembleFile(ensembleFile).map(_._1).toSet
 
+    /* All ENSG */
+    val ensg: Set[String] = readEnsembleFile(ensembleFile).map(_._1).toSet
+
+    /* KEGG gene sets */
     val kegg =
       openSource("c2.cp.kegg.v5.1.symbols.gmt")(overrepresentation.readGMT).map {
         case (name, set) =>
@@ -72,15 +84,19 @@ object Runner {
       }
     val keggM = kegg.toMap
 
+    /* GO gene sets */
     val goBP =
       openSource("c5.bp.v5.1.symbols.gmt")(overrepresentation.readGMT).map {
         case (name, set) =>
           (name, set.flatMap(x => symbol2ensgBoth.get(x)))
       }
     val goBPM = kegg.toMap
+
+    /* GO gene sets of specific size. Removes nodes close to the bottom and the top of the tree. */
     val goBPShort = goBP.filter(x => x._2.size < 100 && x._2.size > 10)
     println("GOBPSHORT SIZE: " + goBPShort.size)
 
+    /** Prints the results of over and underrrepresentation tests to stdout  */
     def printOverrep(set: Set[String],
                      pathways: Seq[(String, Set[String])] = kegg,
                      superPathways: Map[String, String] = keggH,
@@ -115,6 +131,7 @@ object Runner {
       )
     }
 
+    /* Drops duplicated keys */
     def dropDup(series: Series[String, Double], name: String) = {
 
       val dups =
@@ -128,6 +145,7 @@ object Runner {
         .map(x => x._2.head._1 -> x._2.head._2)
         .toSeries -> dups
     }
+    /* Drops duplicated row keys */
     def dropDupF(f: Frame[String, String, Double], name: String) = {
       val dups =
         f.rowIx.toSeq
@@ -147,6 +165,7 @@ object Runner {
         symbol2ensg,
         hgncTable).filter(_ > 0.9).length))
 
+    /* Read in source data start */
     val (rvis, rvisdup) =
       dropDup(readRVIS(rvisFile, symbol2ensg, hgncTable), "rvis")
     val (misz, miszdup) =
@@ -170,7 +189,9 @@ object Runner {
 
     val (dickinsonEssential1, dickinsonNonEssential1) =
       readDickinsonEG(dickinsonFile, symbol2ensg, hgncTable)
+    /* Read in source data end */
 
+    /* Read in disease gene file */
     val diseaseGenes =
       readDiseaseGenes(diseaseGenesFile, symbol2ensg, hgncTable)
 
@@ -182,13 +203,16 @@ object Runner {
     val diseaseGenesWithCondition =
       readDiseaseGenesWithCondition(diseaseGenesFile, symbol2ensg, hgncTable)
 
+    /* Read in power calculations for phi.  */
     val phiPower = readPhiPower(originalPhiFile, symbol2ensg, hgncTable)
 
+    /* Read in pRec from ExAC's file.  */
     val prec = readPRec(exacFile, symbol2ensg, hgncTable)
 
     println(
       "Total drop b/c dup: " + (rvisdup ++ miszdup ++ plidup ++ phidup ++ loftooldup ++ blomendup ++ wangdup ++ hartdup).size)
 
+    /* Full Outer join */
     val table = (Frame(
         "RVIS" -> rvis,
         "missense-Z" -> misz,
@@ -201,6 +225,7 @@ object Runner {
     val dickinsonEssential = dickinsonEssential1
     val dickinsonNonEssential = dickinsonNonEssential1
 
+    /* Write the joined table to disk */
     {
       import org.saddle.io.CsvImplicits._
       val tableToPrint = table.rconcat(
@@ -232,12 +257,14 @@ object Runner {
         .sorted
         .size)
 
+    /* Convert the scores to percentiles. Directions have been aligned already. */
     val percentiles = table.mapVec(x => x.rank() / x.rank().max.get)
 
     val percentileCutoff = 0.85
 
     val invitroScoreNames = table.colIx.toSeq.toSet &~ invivoScoreNames
 
+    /* Take the median of in vivo scores and the median of in vitro scores per row. */
     val medianPercentiles = {
       val invivo = Series(
         percentiles.col(invivoScoreNames.toSeq: _*).toRowSeq.map {
@@ -254,6 +281,7 @@ object Runner {
       Frame("invivo" -> invivo, "invitro" -> invitro).rdropNA
     }
 
+    /* Analysis of pubmed publication counts */
     {
       val pubmedcounts = openSource("pubmed_gene_count.csv")(
         _.getLines
@@ -277,6 +305,7 @@ object Runner {
       essentialPoorlyStudied.print(nrows = 31, ncols = 2)
     }
 
+    /* Write the median percentiles to disk */
     {
       import org.saddle.io.CsvImplicits._
       medianPercentiles.writeCsvFile("medianpercentiles.csv")
@@ -300,6 +329,7 @@ object Runner {
                    medianPercentiles.firstCol("invitro").toVec)
     println("R2 of median percentiles: " + r2med)
 
+    /* Define simplified in vivo / in vitro essential gene sets */
     val invivoEssentialGenes = medianPercentiles
       .firstCol("invivo")
       .filter(_ > percentileCutoff)
@@ -333,6 +363,7 @@ object Runner {
 
     println("not invitro: " + invitroNotEssentialGenes.size)
 
+    /* Analyse pathogenic variants in essential genes */
     {
       println("PATHOGENIC VARIANTS")
       val genesWithPathogenicVariants: Seq[(String, Int)] =
@@ -374,8 +405,9 @@ object Runner {
 
     }
 
+    /* Analyse genes with homozygous lof variants */
     {
-      println("COMMON LOF")
+      println("ESSENTIAL HOM LOF")
       case class LofRecord(cpra: String,
                            gene: String,
                            af: Double,
@@ -542,6 +574,7 @@ object Runner {
 
     }
 
+    /* Analyise the MGI essentiality */
     {
       println("DICKINSON ESSENTIAL LIST ")
       println("dickinsonEssential: " + dickinsonEssential.size)
@@ -637,323 +670,329 @@ object Runner {
           draws = (invivoEssentialGenes).size,
           markedDraws = (invivoEssentialGenes & dominantDiseaseGenes).size)))
 
-    def pathwayplot1(horizontal: Set[String],
-                     vertical: Set[String],
-                     pw: Seq[(String, Set[String])] = kegg,
-                     background: Set[String]) = {
-      val invivoOverRep = overrep(horizontal, pw, background)
-      val invitroOverRep = overrep(vertical, pw, background)
-      val x = (invivoOverRep._1.map(x => x._1 -> (-1 * math.log10(x._2))) ++
-        invivoOverRep._2.map(x => x._1 -> (math.log10(x._2))))
-        .groupBy(_._1)
-        .toSeq
-        .map(x => x._1 -> x._2.map(_._2).maxBy(math.abs))
-        .toSeries
-      val y = (invitroOverRep._1.map(x => x._1 -> (-1 * math.log10(x._2))) ++
-        invitroOverRep._2.map(x => x._1 -> (math.log10(x._2))))
-        .groupBy(_._1)
-        .toSeq
-        .map(x => x._1 -> x._2.map(_._2).maxBy(math.abs))
-        .toSeries
-
-      val numTest = math.log10(0.05 / (x.length * 4)) * -1
-      val frame =
-        Frame("x" -> x, "y" -> y)
-
-      val colors = frame
-        .rfilter(
-          series =>
-            math.abs(series.toVec.raw(0)) > numTest || math.abs(
-              series.toVec.raw(1)) > numTest)
-        .rowIx
-        .toSeq
-
-      (frame, colors)
-    }
-
-    def pathwayplot2(frame: Frame[String, String, Double],
-                     colored: Seq[String],
-                     legend: Seq[String],
-                     labelsToDisplay: Set[String],
-                     labelSize: Double = 0.6,
-                     ylab: String =
-                       "depletion <-- Essential in cell lines --> enrichment",
-                     doLegend: Boolean = true) = {
-      val filteredFrame1 = frame.row(colored: _*)
-      val numTest = math.log10(0.05 / (frame.numRows * 4)) * -1
-
-      val colors: Map[String, Double] =
-        legend
-          .map(x => keggH.get(x).getOrElse("Unknown"))
+    /* Create the pathway enrichment plots */
+    {
+      def pathwayplot1(horizontal: Set[String],
+                       vertical: Set[String],
+                       pw: Seq[(String, Set[String])] = kegg,
+                       background: Set[String]) = {
+        val invivoOverRep = overrep(horizontal, pw, background)
+        val invitroOverRep = overrep(vertical, pw, background)
+        val x = (invivoOverRep._1.map(x => x._1 -> (-1 * math.log10(x._2))) ++
+          invivoOverRep._2.map(x => x._1 -> (math.log10(x._2))))
+          .groupBy(_._1)
           .toSeq
-          .distinct
-          .sorted
-          .zipWithIndex
-          .map(x => x._1 -> (x._2 + 1d))
-          .toMap
+          .map(x => x._1 -> x._2.map(_._2).maxBy(math.abs))
+          .toSeries
+        val y = (invitroOverRep._1.map(x => x._1 -> (-1 * math.log10(x._2))) ++
+          invitroOverRep._2.map(x => x._1 -> (math.log10(x._2))))
+          .groupBy(_._1)
+          .toSeq
+          .map(x => x._1 -> x._2.map(_._2).maxBy(math.abs))
+          .toSeries
 
-      def caseTransform(s: String) =
-        s.split("_")
-          .map(x => x.head.toUpper +: x.tail.toLowerCase)
-          .mkString(" ")
+        val numTest = math.log10(0.05 / (x.length * 4)) * -1
+        val frame =
+          Frame("x" -> x, "y" -> y)
 
-      val filteredLayer1 =
-        (filteredFrame1
-           .rconcat(
-             Frame(
-               "color" -> Series(filteredFrame1.rowIx.toSeq
-                                   .map(x =>
-                                     colors(keggH.get(x).getOrElse("Unknown")))
-                                   .toVec,
-                                 filteredFrame1.rowIx)))
-           .mapRowIndex(rx =>
-             if (labelsToDisplay.contains(rx))
-               caseTransform(rx.stripPrefix("KEGG_"))
-             else ""),
-         point(size = 3d,
-               labelText = true,
-               labelFontSize = labelSize fts,
-               color = DiscreteColors(colors.size),
-               shapeCol = 4,
-               sizeCol = 4))
+        val colors = frame
+          .rfilter(
+            series =>
+              math.abs(series.toVec.raw(0)) > numTest || math.abs(
+                series.toVec.raw(1)) > numTest)
+          .rowIx
+          .toSeq
 
-      xyplot(
-        frame -> point(size = 1.4d, color = Color.gray3),
-        // filteredLayer2,
-        filteredLayer1
-      )(origin = Some(0d -> 0d),
-        frame = false,
-        xlab = "depletion <-- Essential in humans --> enrichment",
-        ylab = ylab,
-        xNumTicks = 0,
-        yNumTicks = 0,
-        xnames = Seq(numTest -> "", -1 * numTest -> ""),
-        ynames = Seq(numTest -> "", -1 * numTest -> ""),
-        xAxisMargin = 0d,
-        yAxisMargin = 0d,
-        xLabFontSize = .5 fts,
-        yLabFontSize = .5 fts,
-        xgrid = true,
-        ygrid = true,
-        // xlim = Some(-60d -> 60d),
-        // ylim = Some(-60d -> 60d),
-        legendFontSize = 0.35 fts,
-        xCustomGrid = true,
-        yCustomGrid = true,
-        // xLineWidthFraction = 0.5,
-        // yLineWidthFraction = 0.65,
-        // yLineStartFraction = 0.25,
-        // xLineStartFraction = 0.35,
-        xTickLength = 0d fts,
-        yTickLength = 0d fts,
-        legendLayout = RelativeToFirst(10d, 10d),
-        rightPadding = 35d,
-        topPadding = 5d,
-        extraLegend =
-          if (doLegend)
-            colors.toSeq.map(
-              x =>
+        (frame, colors)
+      }
+
+      def pathwayplot2(frame: Frame[String, String, Double],
+                       colored: Seq[String],
+                       legend: Seq[String],
+                       labelsToDisplay: Set[String],
+                       labelSize: Double = 0.6,
+                       ylab: String =
+                         "depletion <-- Essential in cell lines --> enrichment",
+                       doLegend: Boolean = true) = {
+        val filteredFrame1 = frame.row(colored: _*)
+        val numTest = math.log10(0.05 / (frame.numRows * 4)) * -1
+
+        val colors: Map[String, Double] =
+          legend
+            .map(x => keggH.get(x).getOrElse("Unknown"))
+            .toSeq
+            .distinct
+            .sorted
+            .zipWithIndex
+            .map(x => x._1 -> (x._2 + 1d))
+            .toMap
+
+        def caseTransform(s: String) =
+          s.split("_")
+            .map(x => x.head.toUpper +: x.tail.toLowerCase)
+            .mkString(" ")
+
+        val filteredLayer1 =
+          (filteredFrame1
+             .rconcat(
+               Frame(
+                 "color" -> Series(
+                   filteredFrame1.rowIx.toSeq
+                     .map(x => colors(keggH.get(x).getOrElse("Unknown")))
+                     .toVec,
+                   filteredFrame1.rowIx)))
+             .mapRowIndex(rx =>
+               if (labelsToDisplay.contains(rx))
+                 caseTransform(rx.stripPrefix("KEGG_"))
+               else ""),
+           point(size = 3d,
+                 labelText = true,
+                 labelFontSize = labelSize fts,
+                 color = DiscreteColors(colors.size),
+                 shapeCol = 4,
+                 sizeCol = 4))
+
+        xyplot(
+          frame -> point(size = 1.4d, color = Color.gray3),
+          // filteredLayer2,
+          filteredLayer1
+        )(origin = Some(0d -> 0d),
+          frame = false,
+          xlab = "depletion <-- Essential in humans --> enrichment",
+          ylab = ylab,
+          xNumTicks = 0,
+          yNumTicks = 0,
+          xnames = Seq(numTest -> "", -1 * numTest -> ""),
+          ynames = Seq(numTest -> "", -1 * numTest -> ""),
+          xAxisMargin = 0d,
+          yAxisMargin = 0d,
+          xLabFontSize = .5 fts,
+          yLabFontSize = .5 fts,
+          xgrid = true,
+          ygrid = true,
+          // xlim = Some(-60d -> 60d),
+          // ylim = Some(-60d -> 60d),
+          legendFontSize = 0.35 fts,
+          xCustomGrid = true,
+          yCustomGrid = true,
+          // xLineWidthFraction = 0.5,
+          // yLineWidthFraction = 0.65,
+          // yLineStartFraction = 0.25,
+          // xLineStartFraction = 0.35,
+          xTickLength = 0d fts,
+          yTickLength = 0d fts,
+          legendLayout = RelativeToFirst(10d, 10d),
+          rightPadding = 35d,
+          topPadding = 5d,
+          extraLegend =
+            if (doLegend)
+              colors.toSeq.map(x =>
                 x._1 -> PointLegend(shape = Shape.circle(1),
                                     color = DiscreteColors(colors.size)(x._2)))
-          else Nil)
+            else Nil)
 
+      }
+
+      val keggLabelsInVitro = Set(
+        "KEGG_AMINOACYL_TRNA_BIOSYNTHESIS",
+        "KEGG_RIBOSOME",
+        "KEGG_DNA_REPLICATION",
+        "KEGG_PROTEASOME",
+        // "KEGG_CELL_CYCLE",
+        "KEGG_SPLICEOSOME",
+        // "KEGG_DRUG_METABOLISM_CYTOCHROME_P450",
+        // "KEGG_MAPK_SIGNALING_PATHWAY",
+        // "KEGG_FOCAL_ADHESION",
+        // "KEGG_CHEMOKINE_SIGNALING_PATHWAY",
+        // "KEGG_OOCYTE_MEIOSIS",
+        "KEGG_UBIQUITIN_MEDIATED_PROTEOLYSIS",
+        "KEGG_CALCIUM_SIGNALING_PATHWAY",
+        // "KEGG_PATHWAYS_IN_CANCER",
+        // "KEGG_LONG_TERM_POTENTIATION",
+        "KEGG_AXON_GUIDANCE",
+        "KEGG_RNA_DEGRADATION",
+        "KEGG_NEUROACTIVE_LIGAND_RECEPTOR_INTERACTION",
+        "KEGG_BASAL_TRANSCRIPTION_FACTORS",
+        // "KEGG_MELANOGENESIS",
+        "KEGG_OLFACTORY_TRANSDUCTION")
+
+      val keggLabelsMgi = Set( //"KEGG_AMINOACYL_TRNA_BIOSYNTHESIS",
+                              "KEGG_RIBOSOME",
+                              "KEGG_DNA_REPLICATION",
+                              "KEGG_PROTEASOME",
+                              // "KEGG_CELL_CYCLE",
+                              "KEGG_SPLICEOSOME",
+                              "KEGG_SYSTEMIC_LUPUS_ERYTHEMATOSUS",
+                              // "KEGG_DRUG_METABOLISM_CYTOCHROME_P450",
+                              // "KEGG_MAPK_SIGNALING_PATHWAY",
+                              "KEGG_FOCAL_ADHESION",
+                              // "KEGG_CHEMOKINE_SIGNALING_PATHWAY",
+                              // "KEGG_OOCYTE_MEIOSIS",
+                              // "KEGG_UBIQUITIN_MEDIATED_PROTEOLYSIS",
+                              // "KEGG_CALCIUM_SIGNALING_PATHWAY",
+                              "KEGG_PATHWAYS_IN_CANCER",
+                              // "KEGG_LONG_TERM_POTENTIATION",
+                              "KEGG_AXON_GUIDANCE",
+                              // "KEGG_RNA_DEGRADATION",
+                              // "KEGG_NEUROACTIVE_LIGAND_RECEPTOR_INTERACTION",
+                              // "KEGG_BASAL_TRANSCRIPTION_FACTORS",
+                              // "KEGG_MELANOGENESIS",
+                              "KEGG_OLFACTORY_TRANSDUCTION")
+
+      val gobppathwayplot = {
+        val (frame, colors) =
+          pathwayplot1(invivoEssentialGenes,
+                       invitroEssentialGenes,
+                       goBP,
+                       table.rowIx.toSeq.toSet)
+        pathwayplot2(frame, colors, colors, Set())
+      }
+      pdfToFile(new java.io.File("overrep_gobp.pdf"), gobppathwayplot, 1000)
+      pngToFile(new java.io.File("overrep_gobp.png"), gobppathwayplot, 2000)
+
+      val (invitropathwayplot, mgipathwayplot) = {
+        val (frame1, colors1) =
+          pathwayplot1(invivoEssentialGenes,
+                       invitroEssentialGenes,
+                       kegg,
+                       table.rowIx.toSeq.toSet)
+        val (frame2, colors2) =
+          pathwayplot1(
+            invivoEssentialGenes,
+            dickinsonEssential,
+            kegg,
+            table.rowIx.toSeq.toSet & (dickinsonEssential ++ dickinsonNonEssential))
+        val invitro =
+          pathwayplot2(frame1,
+                       colors1,
+                       (colors1 ++ colors2).distinct,
+                       keggLabelsMgi)
+        val mgi = pathwayplot2(
+          frame2,
+          colors2,
+          (colors1 ++ colors2).distinct,
+          keggLabelsMgi,
+          ylab = "depletion <-- Essential in mice --> enrichment",
+          doLegend = false)
+        (invitro, mgi)
+      }
+      val compositePathwayPlot =
+        group(
+          group(invitropathwayplot,
+                AlignTo.topLeftCorner(TextBox("B"), invitropathwayplot.bounds),
+                FreeLayout),
+          group(mgipathwayplot,
+                AlignTo.topLeftCorner(TextBox("C"), mgipathwayplot.bounds),
+                FreeLayout),
+          TableLayout(2))
+      pdfToFile(new java.io.File("overrep_composite.pdf"),
+                compositePathwayPlot,
+                1000)
+      pngToFile(new java.io.File("overrep_composite.png"),
+                compositePathwayPlot,
+                2000)
+
+      pdfToFile(new java.io.File("overrep_kegg.pdf"), invitropathwayplot, 1000)
+      pngToFile(new java.io.File("overrep_kegg.png"), invitropathwayplot, 2000)
+
+      pdfToFile(new java.io.File("overrep_kegg_mgi.pdf"), mgipathwayplot, 1000)
+      pngToFile(new java.io.File("overrep_kegg_mgi.png"), mgipathwayplot, 2000)
     }
-
-    val keggLabelsInVitro = Set("KEGG_AMINOACYL_TRNA_BIOSYNTHESIS",
-                                "KEGG_RIBOSOME",
-                                "KEGG_DNA_REPLICATION",
-                                "KEGG_PROTEASOME",
-                                // "KEGG_CELL_CYCLE",
-                                "KEGG_SPLICEOSOME",
-                                // "KEGG_DRUG_METABOLISM_CYTOCHROME_P450",
-                                // "KEGG_MAPK_SIGNALING_PATHWAY",
-                                // "KEGG_FOCAL_ADHESION",
-                                // "KEGG_CHEMOKINE_SIGNALING_PATHWAY",
-                                // "KEGG_OOCYTE_MEIOSIS",
-                                "KEGG_UBIQUITIN_MEDIATED_PROTEOLYSIS",
-                                "KEGG_CALCIUM_SIGNALING_PATHWAY",
-                                // "KEGG_PATHWAYS_IN_CANCER",
-                                // "KEGG_LONG_TERM_POTENTIATION",
-                                "KEGG_AXON_GUIDANCE",
-                                "KEGG_RNA_DEGRADATION",
-                                "KEGG_NEUROACTIVE_LIGAND_RECEPTOR_INTERACTION",
-                                "KEGG_BASAL_TRANSCRIPTION_FACTORS",
-                                // "KEGG_MELANOGENESIS",
-                                "KEGG_OLFACTORY_TRANSDUCTION")
-
-    val keggLabelsMgi = Set( //"KEGG_AMINOACYL_TRNA_BIOSYNTHESIS",
-                            "KEGG_RIBOSOME",
-                            "KEGG_DNA_REPLICATION",
-                            "KEGG_PROTEASOME",
-                            // "KEGG_CELL_CYCLE",
-                            "KEGG_SPLICEOSOME",
-                            "KEGG_SYSTEMIC_LUPUS_ERYTHEMATOSUS",
-                            // "KEGG_DRUG_METABOLISM_CYTOCHROME_P450",
-                            // "KEGG_MAPK_SIGNALING_PATHWAY",
-                            "KEGG_FOCAL_ADHESION",
-                            // "KEGG_CHEMOKINE_SIGNALING_PATHWAY",
-                            // "KEGG_OOCYTE_MEIOSIS",
-                            // "KEGG_UBIQUITIN_MEDIATED_PROTEOLYSIS",
-                            // "KEGG_CALCIUM_SIGNALING_PATHWAY",
-                            "KEGG_PATHWAYS_IN_CANCER",
-                            // "KEGG_LONG_TERM_POTENTIATION",
-                            "KEGG_AXON_GUIDANCE",
-                            // "KEGG_RNA_DEGRADATION",
-                            // "KEGG_NEUROACTIVE_LIGAND_RECEPTOR_INTERACTION",
-                            // "KEGG_BASAL_TRANSCRIPTION_FACTORS",
-                            // "KEGG_MELANOGENESIS",
-                            "KEGG_OLFACTORY_TRANSDUCTION")
-
-    val gobppathwayplot = {
-      val (frame, colors) =
-        pathwayplot1(invivoEssentialGenes,
-                     invitroEssentialGenes,
-                     goBP,
-                     table.rowIx.toSeq.toSet)
-      pathwayplot2(frame, colors, colors, Set())
-    }
-    pdfToFile(new java.io.File("overrep_gobp.pdf"), gobppathwayplot, 1000)
-    pngToFile(new java.io.File("overrep_gobp.png"), gobppathwayplot, 2000)
-
-    val (invitropathwayplot, mgipathwayplot) = {
-      val (frame1, colors1) =
-        pathwayplot1(invivoEssentialGenes,
-                     invitroEssentialGenes,
-                     kegg,
-                     table.rowIx.toSeq.toSet)
-      val (frame2, colors2) =
-        pathwayplot1(
-          invivoEssentialGenes,
-          dickinsonEssential,
-          kegg,
-          table.rowIx.toSeq.toSet & (dickinsonEssential ++ dickinsonNonEssential))
-      val invitro =
-        pathwayplot2(frame1,
-                     colors1,
-                     (colors1 ++ colors2).distinct,
-                     keggLabelsMgi)
-      val mgi = pathwayplot2(
-        frame2,
-        colors2,
-        (colors1 ++ colors2).distinct,
-        keggLabelsMgi,
-        ylab = "depletion <-- Essential in mice --> enrichment",
-        doLegend = false)
-      (invitro, mgi)
-    }
-    val compositePathwayPlot =
-      group(
-        group(invitropathwayplot,
-              AlignTo.topLeftCorner(TextBox("B"), invitropathwayplot.bounds),
-              FreeLayout),
-        group(mgipathwayplot,
-              AlignTo.topLeftCorner(TextBox("C"), mgipathwayplot.bounds),
-              FreeLayout),
-        TableLayout(2))
-    pdfToFile(new java.io.File("overrep_composite.pdf"),
-              compositePathwayPlot,
-              1000)
-    pngToFile(new java.io.File("overrep_composite.png"),
-              compositePathwayPlot,
-              2000)
-
-    pdfToFile(new java.io.File("overrep_kegg.pdf"), invitropathwayplot, 1000)
-    pngToFile(new java.io.File("overrep_kegg.png"), invitropathwayplot, 2000)
-
-    pdfToFile(new java.io.File("overrep_kegg_mgi.pdf"), mgipathwayplot, 1000)
-    pngToFile(new java.io.File("overrep_kegg_mgi.png"), mgipathwayplot, 2000)
 
     val invivoButNotInVitro = invivoEssentialGenes & invitroNotEssentialGenes
     val invitroButNotInVivo = invitroEssentialGenes & invivoNotEssentialGenes
     val invivoAndInvitro = invivoEssentialGenes & invitroEssentialGenes
     val neigherInvivoAndInvitro = invivoNotEssentialGenes & invitroNotEssentialGenes
 
-    println(" CELL LINES ")
-    println("in vivo: " + invivoEssentialGenes.size)
-    println("in vitro: " + invitroEssentialGenes.size)
-    println("in vivo & in vitro : " + invivoAndInvitro.size)
-    println(
-      "in vivo &~ in vitro : " + (invivoEssentialGenes &~ invitroEssentialGenes).size)
-    println(
-      "in vitro &~ in vivo : " + (invitroEssentialGenes &~ invivoEssentialGenes).size)
+    /* Analyise in vivo, in vitro and mouse essentiality .*/
+    {
+      println(" CELL LINES ")
+      println("in vivo: " + invivoEssentialGenes.size)
+      println("in vitro: " + invitroEssentialGenes.size)
+      println("in vivo & in vitro : " + invivoAndInvitro.size)
+      println(
+        "in vivo &~ in vitro : " + (invivoEssentialGenes &~ invitroEssentialGenes).size)
+      println(
+        "in vitro &~ in vivo : " + (invitroEssentialGenes &~ invivoEssentialGenes).size)
 
-    println(
-      "in vitro &~ in vivo high power : " + ((invitroEssentialGenes &~ invivoEssentialGenes) & phiPower
-        .filter(_ > 0.2)
-        .index
-        .toSeq
-        .toSet).size)
+      println(
+        "in vitro &~ in vivo high power : " + ((invitroEssentialGenes &~ invivoEssentialGenes) & phiPower
+          .filter(_ > 0.2)
+          .index
+          .toSeq
+          .toSet).size)
 
-    val invitroOnlyHighPower = (invitroEssentialGenes &~ invivoEssentialGenes) & phiPower
-        .filter(_ > 0.2)
-        .index
-        .toSeq
-        .toSet
+      val invitroOnlyHighPower = (invitroEssentialGenes &~ invivoEssentialGenes) & phiPower
+          .filter(_ > 0.2)
+          .index
+          .toSeq
+          .toSet
 
-    println(
-      " in vitro &~ invivoEssentialGenes high power enrichment in recessive diseases: " + (overrepresentation
+      println(" in vitro &~ invivoEssentialGenes high power enrichment in recessive diseases: " + (overrepresentation
         .enrichmentTest(
           total = table.rowIx.toSeq.toSet.size,
           marked = (recessiveDiseaseGenes & (table.rowIx.toSeq.toSet)).size,
           draws = (invitroOnlyHighPower).size,
           markedDraws = (invitroOnlyHighPower & recessiveDiseaseGenes).size)))
 
-    val highpower = phiPower.filter(_ > 0.2).index.toSeq.toSet
+      val highpower = phiPower.filter(_ > 0.2).index.toSeq.toSet
 
-    println(" CELL LINE + MGI + IN VIVO")
-    println(
-      "in vivo + in vitro + mgi: " + (invivoEssentialGenes ++ invitroEssentialGenes ++ dickinsonEssential).size)
-    println("in vivo: " + invivoEssentialGenes.size)
-    println("in vitro: " + invitroEssentialGenes.size)
-    println("mgi " + dickinsonEssential.size)
-    println(
-      "mgi & in vivo & in vitro: " + (dickinsonEssential & invivoEssentialGenes & invitroEssentialGenes).size)
-    println(
-      "mgi &~ in vivo &~ in vitro: " + ((dickinsonEssential &~ invivoEssentialGenes) &~ invitroEssentialGenes).size)
-    println(
-      "in vivo &~ mgi &~ in vitro: " + ((invivoEssentialGenes &~ dickinsonEssential) &~ invitroEssentialGenes).size)
-    println(
-      "in vitro &~ mgi &~ in vivo: " + ((invitroEssentialGenes &~ dickinsonEssential) &~ invivoEssentialGenes).size)
-    println(
-      "(in vitro & mgi) &~ in vivo: " + ((invitroEssentialGenes & dickinsonEssential) &~ invivoEssentialGenes).size)
-    println(
-      "(in vivo & mgi) &~ in vitro: " + ((invivoEssentialGenes & dickinsonEssential) &~ invitroEssentialGenes).size)
-    println(
-      "(in vivo & in vitro) &~ mgi: " + ((invivoEssentialGenes & invitroEssentialGenes) &~ dickinsonEssential).size)
+      println(" CELL LINE + MGI + IN VIVO")
+      println(
+        "in vivo + in vitro + mgi: " + (invivoEssentialGenes ++ invitroEssentialGenes ++ dickinsonEssential).size)
+      println("in vivo: " + invivoEssentialGenes.size)
+      println("in vitro: " + invitroEssentialGenes.size)
+      println("mgi " + dickinsonEssential.size)
+      println(
+        "mgi & in vivo & in vitro: " + (dickinsonEssential & invivoEssentialGenes & invitroEssentialGenes).size)
+      println(
+        "mgi &~ in vivo &~ in vitro: " + ((dickinsonEssential &~ invivoEssentialGenes) &~ invitroEssentialGenes).size)
+      println(
+        "in vivo &~ mgi &~ in vitro: " + ((invivoEssentialGenes &~ dickinsonEssential) &~ invitroEssentialGenes).size)
+      println(
+        "in vitro &~ mgi &~ in vivo: " + ((invitroEssentialGenes &~ dickinsonEssential) &~ invivoEssentialGenes).size)
+      println(
+        "(in vitro & mgi) &~ in vivo: " + ((invitroEssentialGenes & dickinsonEssential) &~ invivoEssentialGenes).size)
+      println(
+        "(in vivo & mgi) &~ in vitro: " + ((invivoEssentialGenes & dickinsonEssential) &~ invitroEssentialGenes).size)
+      println(
+        "(in vivo & in vitro) &~ mgi: " + ((invivoEssentialGenes & invitroEssentialGenes) &~ dickinsonEssential).size)
 
-    println(
-      "mgi &~ in vitro : " + (dickinsonEssential &~ invitroEssentialGenes).size)
+      println(
+        "mgi &~ in vitro : " + (dickinsonEssential &~ invitroEssentialGenes).size)
 
-    println(
-      "in vivo &~ in vitro : " + (invivoEssentialGenes &~ invitroEssentialGenes).size)
-    println(
-      "in vitro &~ in vivo : " + (invitroEssentialGenes &~ invivoEssentialGenes).size)
+      println(
+        "in vivo &~ in vitro : " + (invivoEssentialGenes &~ invitroEssentialGenes).size)
+      println(
+        "in vitro &~ in vivo : " + (invitroEssentialGenes &~ invivoEssentialGenes).size)
 
-    println(
-      "in vitro & 0lof: " + (invitroEssentialGenes & lofcount
-        .filter(_ == 0)
-        .index
-        .toSeq
-        .toSet).size)
-    println(
-      "mgi & 0lof: " + (dickinsonEssential & lofcount
-        .filter(_ == 0)
-        .index
-        .toSeq
-        .toSet).size)
+      println(
+        "in vitro & 0lof: " + (invitroEssentialGenes & lofcount
+          .filter(_ == 0)
+          .index
+          .toSeq
+          .toSet).size)
+      println(
+        "mgi & 0lof: " + (dickinsonEssential & lofcount
+          .filter(_ == 0)
+          .index
+          .toSeq
+          .toSet).size)
 
-    println(
-      "mgi & in vivo & in vitro: " + (dickinsonEssential & invivoEssentialGenes & invitroEssentialGenes)
-        .map(ensg2symbol))
+      println(
+        "mgi & in vivo & in vitro: " + (dickinsonEssential & invivoEssentialGenes & invitroEssentialGenes)
+          .map(ensg2symbol))
 
-    println(
-      "mgi & in vivo & in vitro: \n" + (dickinsonEssential & invivoEssentialGenes & invitroEssentialGenes)
-        .map(x => ensg2symbol(x) -> unknowngenes(x))
-        .toSeq
-        .sortBy(_._1)
-        .map(x => x._1 + "\t" + x._2)
-        .mkString("\n"))
+      println(
+        "mgi & in vivo & in vitro: \n" + (dickinsonEssential & invivoEssentialGenes & invitroEssentialGenes)
+          .map(x => ensg2symbol(x) -> unknowngenes(x))
+          .toSeq
+          .sortBy(_._1)
+          .map(x => x._1 + "\t" + x._2)
+          .mkString("\n"))
+    }
 
+    /* Analysis for the core essential genes*/
     {
       println(
         "CORE essential genes, network, dickinsonEssential & invivoEssentialGenes & invitroEssentialGenes")
@@ -1063,6 +1102,7 @@ object Runner {
 
     }
 
+    /* Compare in vivo and in vitro scores */
     {
       println("Pairwise comparison with Odds-Ratio")
       val contingency = percentiles.colIx.toSeq.flatMap { cx1 =>
