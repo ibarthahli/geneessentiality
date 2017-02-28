@@ -207,7 +207,7 @@ object Runner {
         Frame("Dickinson_EG" -> Series(
           dickinsonEssential.map(x => x -> 1.0).toSeq ++ dickinsonNonEssential
             .map(x => x -> 0d): _*)))
-      tableToPrint.writeCsvFile("table.csv")
+      tableToPrint.writeCsvFile("ST1.csv")
     }
 
     val invivoScoreNames = Set(
