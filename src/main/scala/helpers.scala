@@ -6,6 +6,13 @@ import stringsplit._
 import org.saddle._
 import overrepresentation._
 
+case class GFFEntry(chr: String,
+                    from: Int,
+                    to: Int,
+                    featureType: String,
+                    attributes: Map[String, String],
+                    name: String)
+
 object Helpers {
 
   def readPathogenicVariants(file: String): Seq[String] =
@@ -268,7 +275,7 @@ object Helpers {
                       symbol2ensg: Map[String, String],
                       hgncTable: Map[String, String]) = {
     import org.saddle.io._
-    val s = CsvParser
+    val eg = CsvParser
       .parse(CsvFile(file))
       .withColIndex(0)
       .withRowIndex(0)
@@ -284,11 +291,28 @@ object Helpers {
         ensg.getOrElse(x)
       })
 
-    val lethal =
-      s.filter(x => x == "Y").index.toSeq.toSet
+    val nlg = CsvParser
+      .parse(CsvFile(file))
+      .withColIndex(0)
+      .withRowIndex(0)
+      .firstCol("NLG")
+      .mapIndex(x => {
 
-    val viable = s.filter(_ == "N").index.toSeq.toSet
-    (lethal, viable)
+        val ensg = symbol2ensg.get(x).orElse(hgncTable.get(x))
+
+        if (ensg.isEmpty) {
+          println("dickinson can't find " + x)
+        }
+
+        ensg.getOrElse(x)
+      })
+
+    val lethal =
+      eg.filter(x => x == "Y").index.toSeq.toSet
+
+    val viable = nlg.filter(_ == "Y").index.toSeq.toSet
+    val homologyMapped = eg.index.toSeq.toSet
+    (lethal, viable, homologyMapped)
   }
 
   def readPLI(file: String,
@@ -307,6 +331,81 @@ object Helpers {
 
         if (ensg.isEmpty) {
           println("pli can't find " + x)
+        }
+
+        ensg.getOrElse(x)
+      })
+
+  }
+
+  def readGTF(s: scala.io.Source): Iterator[GFFEntry] =
+    s.getLines
+      .filterNot(_.startsWith("#"))
+      .map { line =>
+        val spl = line.splitM('\t')
+        val src = spl(1)
+        val seqname = (new String(spl(0)))
+        val feature = (new String(spl(2)))
+        val start = spl(3).toInt
+        val end = spl(4).toInt
+        val strand = spl(6)
+        val attributes = Map(
+          spl(8)
+            .splitM(';')
+            .map(_.trim)
+            .filter(_.size > 0)
+            .map { t =>
+              val spl = t.splitM(' ')
+              (new String(spl(0))) -> (new String(
+                spl.drop(1).mkString(" ").filterNot(_ == '"')))
+            }
+            .toList: _*)
+
+        src -> GFFEntry(seqname,
+                        start - 1,
+                        end,
+                        feature,
+                        attributes,
+                        name = "")
+
+      }
+      .map(_._2)
+
+  def readCDSLengths(gencode: String): Series[String, Int] = {
+    println(openSource(gencode)(_.getLines.size))
+    openSource(gencode) { s =>
+      val allEnsembl = readGTF(s).toList
+      val exons = allEnsembl.filter(_.featureType == "exon").toList
+      val trs = exons
+        .groupBy(_.attributes("transcript_id").split("\\.")(0))
+        .toList
+        .map(
+          x =>
+            x._2.head.attributes("gene_id").split("\\.")(0) -> x._2
+              .map(y => y.to - y.from + 1)
+              .sum)
+      println(trs.size)
+
+      trs.groupBy(_._1).toList.map(_._2.maxBy(_._2)).toSeries
+    }
+  }
+
+  def readSHet(file: String,
+               symbol2ensg: Map[String, String],
+               hgncTable: Map[String, String]): Series[String, Double] = {
+    import org.saddle.io._
+    CsvParser
+      .parse(CsvFile(file))
+      .withColIndex(0)
+      .withRowIndex(0)
+      .firstCol("s_het")
+      .mapValues(CsvParser.parseDouble)
+      .mapIndex(x => {
+
+        val ensg = symbol2ensg.get(x).orElse(hgncTable.get(x))
+
+        if (ensg.isEmpty) {
+          println("shet can't find " + x)
         }
 
         ensg.getOrElse(x)

@@ -1,10 +1,13 @@
 import org.nspl._
+import org.nspl.data._
 import org.nspl.saddle._
 import org.nspl.awtrenderer._
 import fileutils._
 import stringsplit._
 import org.saddle._
 import org.saddle.linalg._
+
+import java.io.File
 
 import OverRep._
 
@@ -34,6 +37,9 @@ object Runner {
     val exacVCF = "ExAC.r0.3.1.sites.vep.vcf.gz"
     val pathogenicVariantsFile =
       "pathogenic_2016_07_R1_SNVs_noBenign_withInDel_uniqPos_insideENSTmatchedFromHg19.bed"
+    val sHetFile = "ng.3831-S2.csv"
+
+    val gencodefile = "gencode.v26.annotation.gtf.gz"
 
     /* Parse the ExAC vcf file and extract lof variants. */
     // openSource(exacVCF) { s =>
@@ -44,6 +50,15 @@ object Runner {
     //     }
     //   }
     // }
+
+    val cdsLength = readCDSLengths(gencodefile)
+
+    {
+      import org.saddle.io.CsvImplicits._
+
+      Frame("cdslength" -> cdsLength).writeCsvFile("cdslength.csv")
+    }
+    print(cdsLength)
 
     val keggH = readKeggHierarchy(keggHierarchyFile)
 
@@ -172,6 +187,8 @@ object Runner {
       dropDup(readMisZ(exacFile, symbol2ensg, hgncTable), "misz")
     val (pli, plidup) =
       dropDup(readPLI(exacFile, symbol2ensg, hgncTable), "pli")
+    val (sHet, sHetDup) =
+      dropDup(readSHet(sHetFile, symbol2ensg, hgncTable), "s_het")
     val (phi, phidup) =
       dropDup(readPhi(originalPhiFile, symbol2ensg, hgncTable), "phi")
     val (loftool, loftooldup) =
@@ -187,7 +204,7 @@ object Runner {
     val lekMgiEssential =
       readLekMgiEssential(lekMgiEssentialFile, symbol2ensg, hgncTable)
 
-    val (dickinsonEssential1, dickinsonNonEssential1) =
+    val (dickinsonEssential1, dickinsonNonEssential1, dickinsonAllGenes) =
       readDickinsonEG(dickinsonFile, symbol2ensg, hgncTable)
     /* Read in source data end */
 
@@ -210,7 +227,7 @@ object Runner {
     val prec = readPRec(exacFile, symbol2ensg, hgncTable)
 
     println(
-      "Total drop b/c dup: " + (rvisdup ++ miszdup ++ plidup ++ phidup ++ loftooldup ++ blomendup ++ wangdup ++ hartdup).size)
+      "Total drop b/c dup: " + (rvisdup ++ miszdup ++ plidup ++ phidup ++ loftooldup ++ blomendup ++ wangdup ++ hartdup ++ sHetDup).size)
 
     /* Full Outer join */
     val table = (Frame(
@@ -219,11 +236,16 @@ object Runner {
         "pLi" -> pli,
         "Phi" -> phi,
         "LofTool" -> loftool,
+        "s_het" -> sHet,
         "Blomen KBM7" -> blomen
       ) rconcat wang rconcat hart) //.row(phiPower.filter(_ > 0.2).index.toSeq: _*)
 
+    println(table.firstCol("s_het"))
+
     val dickinsonEssential = dickinsonEssential1
     val dickinsonNonEssential = dickinsonNonEssential1
+    val allDickinson = dickinsonEssential ++ dickinsonNonEssential
+    println("allDickinson.size: " + allDickinson.size)
 
     /* Write the joined table to disk */
     {
@@ -240,7 +262,8 @@ object Runner {
       "missense-Z",
       "LofTool",
       "pLi",
-      "Phi"
+      "Phi",
+      "s_het"
     )
 
     println(
@@ -257,6 +280,24 @@ object Runner {
         .sorted
         .size)
 
+    val ranks = table.mapVec(_.rank())
+
+    {
+      val tableWithCDSLength = table.col(invivoScoreNames.toSeq: _*) rconcat Frame(
+          "length" -> cdsLength)
+
+      println((table.rowIx.toSeq.toSet &~ cdsLength.index.toSeq.toSet))
+      println((cdsLength.index.toSeq.toSet &~ table.rowIx.toSeq.toSet))
+
+      println(tableWithCDSLength)
+      invivoScoreNames.foreach { name =>
+        val v1 = tableWithCDSLength.firstCol(name).toVec.rank()
+        val v2 = tableWithCDSLength.firstCol("length").toVec.rank()
+
+        println(name + " " + math.pow(CorrelationPlot.cor(v1, v2), 2d))
+      }
+    }
+    break
     /* Convert the scores to percentiles. Directions have been aligned already. */
     val percentiles = table.mapVec(x => x.rank() / x.rank().max.get)
 
@@ -396,7 +437,7 @@ object Runner {
           .size)
 
       writeToFile(
-        "essentialgenes_diseases.tsv",
+        s"essentialgenes_diseases_c$percentileCutoff.tsv",
         "symbol\tcondition\tnumber_of_pathogenic_variants\tinvivo_essential\tinvitro_essential\tmice_essential\n" +
           essentialGenesAndDiseases
             .map(x =>
@@ -847,10 +888,14 @@ object Runner {
                        table.rowIx.toSeq.toSet)
         pathwayplot2(frame, colors, colors, Set())
       }
-      pdfToFile(new java.io.File("overrep_gobp.pdf"), gobppathwayplot, 1000)
-      pngToFile(new java.io.File("overrep_gobp.png"), gobppathwayplot, 2000)
+      pdfToFile(new java.io.File(s"overrep_gobp_c$percentileCutoff.pdf"),
+                gobppathwayplot,
+                1000)
+      pngToFile(new java.io.File(s"overrep_gobp_c$percentileCutoff.png"),
+                gobppathwayplot,
+                2000)
 
-      val (invitropathwayplot, mgipathwayplot) = {
+      val (invitropathwayplot, mgipathwayplot, mgipathwayplotAllGenes) = {
         val (frame1, colors1) =
           pathwayplot1(invivoEssentialGenes,
                        invitroEssentialGenes,
@@ -862,6 +907,13 @@ object Runner {
             dickinsonEssential,
             kegg,
             table.rowIx.toSeq.toSet & (dickinsonEssential ++ dickinsonNonEssential))
+
+        val (frame3, colors3) =
+          pathwayplot1(invivoEssentialGenes,
+                       dickinsonEssential,
+                       kegg,
+                       table.rowIx.toSeq.toSet & dickinsonAllGenes)
+
         val invitro =
           pathwayplot2(frame1,
                        colors1,
@@ -874,7 +926,15 @@ object Runner {
           keggLabelsMgi,
           ylab = "depletion <-- Essential in mice --> enrichment",
           doLegend = false)
-        (invitro, mgi)
+
+        val mgiAllGenes = pathwayplot2(
+          frame3,
+          colors3,
+          (colors1 ++ colors3).distinct,
+          keggLabelsMgi,
+          ylab = "depletion <-- Essential in mice --> enrichment",
+          doLegend = false)
+        (invitro, mgi, mgiAllGenes)
       }
       val compositePathwayPlot =
         group(
@@ -885,18 +945,55 @@ object Runner {
                 AlignTo.topLeftCorner(TextBox("C"), mgipathwayplot.bounds),
                 FreeLayout),
           TableLayout(2))
-      pdfToFile(new java.io.File("overrep_composite.pdf"),
+
+      val compositePathwayPlotAllGene =
+        group(
+          group(invitropathwayplot,
+                AlignTo.topLeftCorner(TextBox("B"), invitropathwayplot.bounds),
+                FreeLayout),
+          group(
+            mgipathwayplotAllGenes,
+            AlignTo.topLeftCorner(TextBox("C"), mgipathwayplotAllGenes.bounds),
+            FreeLayout),
+          TableLayout(2))
+      pdfToFile(new java.io.File(s"overrep_composite_c$percentileCutoff.pdf"),
                 compositePathwayPlot,
                 1000)
-      pngToFile(new java.io.File("overrep_composite.png"),
+      pngToFile(new java.io.File(s"overrep_composite_c$percentileCutoff.png"),
                 compositePathwayPlot,
                 2000)
 
-      pdfToFile(new java.io.File("overrep_kegg.pdf"), invitropathwayplot, 1000)
-      pngToFile(new java.io.File("overrep_kegg.png"), invitropathwayplot, 2000)
+      pdfToFile(
+        new java.io.File(s"overrep_composite_all_c$percentileCutoff.pdf"),
+        compositePathwayPlotAllGene,
+        1000)
+      pngToFile(
+        new java.io.File(s"overrep_composite_all_c$percentileCutoff.png"),
+        compositePathwayPlotAllGene,
+        2000)
 
-      pdfToFile(new java.io.File("overrep_kegg_mgi.pdf"), mgipathwayplot, 1000)
-      pngToFile(new java.io.File("overrep_kegg_mgi.png"), mgipathwayplot, 2000)
+      pdfToFile(new java.io.File(s"overrep_kegg_c$percentileCutoff.pdf"),
+                invitropathwayplot,
+                1000)
+      pngToFile(new java.io.File(s"overrep_kegg_c$percentileCutoff.png"),
+                invitropathwayplot,
+                2000)
+
+      pdfToFile(new java.io.File(s"overrep_kegg_mgi_c$percentileCutoff.pdf"),
+                mgipathwayplot,
+                1000)
+      pngToFile(new java.io.File(s"overrep_kegg_mgi_c$percentileCutoff.png"),
+                mgipathwayplot,
+                2000)
+
+      pdfToFile(
+        new java.io.File(s"overrep_kegg_mgi_all_c$percentileCutoff.pdf"),
+        mgipathwayplotAllGenes,
+        1000)
+      pngToFile(
+        new java.io.File(s"overrep_kegg_mgi_all_c$percentileCutoff.png"),
+        mgipathwayplotAllGenes,
+        2000)
     }
 
     val invivoButNotInVitro = invivoEssentialGenes & invitroNotEssentialGenes
@@ -936,61 +1033,109 @@ object Runner {
           markedDraws = (invitroOnlyHighPower & recessiveDiseaseGenes).size)))
 
       val highpower = phiPower.filter(_ > 0.2).index.toSeq.toSet
+    }
 
-      println(" CELL LINE + MGI + IN VIVO")
+    {
+      println("DISTRIBUTION OF IN VIVO PERCENTILES IN MOUSE ESSENTIAL")
+      val mouseEssential = medianPercentiles.row(dickinsonEssential.toSeq: _*)
+      val hist =
+        xyplot((HistogramData(mouseEssential.firstCol("invivo").toVec.toSeq,
+                              breaks = 100).toScatter,
+                List(line(color = Color.red)),
+                InLegend("in vivo")),
+               (HistogramData(mouseEssential.firstCol("invitro").toVec.toSeq,
+                              breaks = 100).toScatter,
+                List(line(color = Color.blue)),
+                InLegend("in vitro")))(
+          xlim = Some(0d -> 1d),
+          main =
+            "density of essentiality percentiles in 3326 mouse essential genes")
+
+      pdfToFile(new File("invivo_score_histogram_in_mgi_essential.pdf"),
+                hist,
+                500)
+      println(mouseEssential)
+    }
+
+    def vennCellInVivoDickinson(
+        invivoEssentialGenes: Set[String],
+        invitroEssentialGenes: Set[String],
+        dickinsonEssential: Set[String],
+        label: String
+    ) {
+      println(" CELL LINE + MGI + IN VIVO " + label)
       println(
-        "in vivo + in vitro + mgi: " + (invivoEssentialGenes ++ invitroEssentialGenes ++ dickinsonEssential).size)
-      println("in vivo: " + invivoEssentialGenes.size)
-      println("in vitro: " + invitroEssentialGenes.size)
-      println("mgi " + dickinsonEssential.size)
-      println(
-        "mgi & in vivo & in vitro: " + (dickinsonEssential & invivoEssentialGenes & invitroEssentialGenes).size)
-      println(
-        "mgi &~ in vivo &~ in vitro: " + ((dickinsonEssential &~ invivoEssentialGenes) &~ invitroEssentialGenes).size)
-      println(
-        "in vivo &~ mgi &~ in vitro: " + ((invivoEssentialGenes &~ dickinsonEssential) &~ invitroEssentialGenes).size)
-      println(
-        "in vitro &~ mgi &~ in vivo: " + ((invitroEssentialGenes &~ dickinsonEssential) &~ invivoEssentialGenes).size)
-      println(
-        "(in vitro & mgi) &~ in vivo: " + ((invitroEssentialGenes & dickinsonEssential) &~ invivoEssentialGenes).size)
-      println(
-        "(in vivo & mgi) &~ in vitro: " + ((invivoEssentialGenes & dickinsonEssential) &~ invitroEssentialGenes).size)
-      println(
-        "(in vivo & in vitro) &~ mgi: " + ((invivoEssentialGenes & invitroEssentialGenes) &~ dickinsonEssential).size)
+        label + " in vivo + in vitro + mgi: " + (invivoEssentialGenes ++ invitroEssentialGenes ++ dickinsonEssential).size)
 
       println(
-        "mgi &~ in vitro : " + (dickinsonEssential &~ invitroEssentialGenes).size)
+        label + "in vivo & in vitro & mgi: " + (invivoEssentialGenes & invitroEssentialGenes & dickinsonEssential).size)
+
+      println(label + "in vivo: " + invivoEssentialGenes.size)
+      println(label + "in vitro: " + invitroEssentialGenes.size)
+      println(label + "mgi " + dickinsonEssential.size)
+      println(
+        label + "mgi & in vivo & in vitro: " + (dickinsonEssential & invivoEssentialGenes & invitroEssentialGenes).size)
+      println(
+        label + "mgi &~ in vivo &~ in vitro: " + ((dickinsonEssential &~ invivoEssentialGenes) &~ invitroEssentialGenes).size)
+      println(
+        label + "in vivo &~ mgi &~ in vitro: " + ((invivoEssentialGenes &~ dickinsonEssential) &~ invitroEssentialGenes).size)
+      println(
+        label + "in vitro &~ mgi &~ in vivo: " + ((invitroEssentialGenes &~ dickinsonEssential) &~ invivoEssentialGenes).size)
+      println(
+        label + "(in vitro & mgi) &~ in vivo: " + ((invitroEssentialGenes & dickinsonEssential) &~ invivoEssentialGenes).size)
+      println(
+        label + "(in vivo & mgi) &~ in vitro: " + ((invivoEssentialGenes & dickinsonEssential) &~ invitroEssentialGenes).size)
+      println(
+        label + "(in vivo & in vitro) &~ mgi: " + ((invivoEssentialGenes & invitroEssentialGenes) &~ dickinsonEssential).size)
 
       println(
-        "in vivo &~ in vitro : " + (invivoEssentialGenes &~ invitroEssentialGenes).size)
-      println(
-        "in vitro &~ in vivo : " + (invitroEssentialGenes &~ invivoEssentialGenes).size)
+        label + "mgi &~ in vitro : " + (dickinsonEssential &~ invitroEssentialGenes).size)
 
       println(
-        "in vitro & 0lof: " + (invitroEssentialGenes & lofcount
+        label + "in vivo &~ in vitro : " + (invivoEssentialGenes &~ invitroEssentialGenes).size)
+      println(
+        label + "in vitro &~ in vivo : " + (invitroEssentialGenes &~ invivoEssentialGenes).size)
+
+      println(
+        label + "in vitro & 0lof: " + (invitroEssentialGenes & lofcount
           .filter(_ == 0)
           .index
           .toSeq
           .toSet).size)
       println(
-        "mgi & 0lof: " + (dickinsonEssential & lofcount
+        label + "mgi & 0lof: " + (dickinsonEssential & lofcount
           .filter(_ == 0)
           .index
           .toSeq
           .toSet).size)
 
       println(
-        "mgi & in vivo & in vitro: " + (dickinsonEssential & invivoEssentialGenes & invitroEssentialGenes)
+        label + "mgi & in vivo & in vitro: " + (dickinsonEssential & invivoEssentialGenes & invitroEssentialGenes)
           .map(ensg2symbol))
 
       println(
-        "mgi & in vivo & in vitro: \n" + (dickinsonEssential & invivoEssentialGenes & invitroEssentialGenes)
+        label + "mgi & in vivo & in vitro: \n" + (dickinsonEssential & invivoEssentialGenes & invitroEssentialGenes)
           .map(x => ensg2symbol(x) -> unknowngenes(x))
           .toSeq
           .sortBy(_._1)
           .map(x => x._1 + "\t" + x._2)
           .mkString("\n"))
     }
+
+    vennCellInVivoDickinson(
+      invivoEssentialGenes = invivoEssentialGenes & allDickinson,
+      invitroEssentialGenes = invitroEssentialGenes & allDickinson,
+      dickinsonEssential = dickinsonEssential,
+      label = " intersect alldickinson "
+    )
+    vennCellInVivoDickinson(
+      invivoEssentialGenes = invivoEssentialGenes,
+      invitroEssentialGenes = invitroEssentialGenes,
+      dickinsonEssential = dickinsonEssential,
+      label = ""
+    )
+
+    // break
 
     /* Analysis for the core essential genes*/
     {
@@ -1080,14 +1225,14 @@ object Runner {
 
       println(significantEnrichment.mkString("\n"))
 
-      writeToFile("annotated_core_string_edges.csv",
+      writeToFile(s"annotated_core_string_edges_c$percentileCutoff.csv",
                   "g1,g2,v\n" + edgeListFromString.map {
                     case (g1, g2, v) =>
                       List(ensg2symbol(g1), ensg2symbol(g2), v).mkString(",")
                   }.mkString("\n"))
 
       writeToFile(
-        "annotated_core_string_nodes.csv",
+        s"annotated_core_string_nodes_c$percentileCutoff.csv",
         "g,go,sg\n" + edgeListFromString
           .flatMap(x => List(x._1, x._2))
           .map { g =>
@@ -1147,8 +1292,20 @@ object Runner {
           colormap = RedBlue(-1, 1, 0)
         )
         ._1
-      pdfToFile(new java.io.File("or.pdf"), orplot, 1000)
-      pngToFile(new java.io.File("or.png"), orplot, 2000)
+      pdfToFile(new java.io.File(s"or_c$percentileCutoff.pdf"), orplot, 1000)
+      pngToFile(new java.io.File(s"or_c$percentileCutoff.png"), orplot, 2000)
+
+    }
+
+    {
+      println("Pairwise comparison with Rank Correlation")
+      val plot = CorrelationPlot
+        .fromColumns(
+          f = ranks
+        )
+        ._1
+      pdfToFile(new java.io.File(s"rankcorr.pdf"), plot, 1000)
+      pngToFile(new java.io.File(s"rankcorr.png"), plot, 2000)
 
     }
 

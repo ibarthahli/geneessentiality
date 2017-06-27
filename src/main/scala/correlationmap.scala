@@ -5,6 +5,22 @@ import org.nspl.saddle._
 
 object CorrelationPlot {
 
+  def cor(v1: Vec[Double], v2: Vec[Double]) = {
+    val missing = (v1.toSeq.zipWithIndex.filter(_._1.isNaN).map(_._2) ++
+      v2.toSeq.zipWithIndex.filter(_._1.isNaN).map(_._2)).toArray
+
+    val v1a = v1.without(missing)
+    val v2a = v2.without(missing)
+    val v1ad = v1a.demeaned
+    val v2ad = v2a.demeaned
+    val s1 = v1a.stdev
+    val s2 = v2a.stdev
+
+    val cov = v1ad vv v2ad * (1d / (v1ad.length - 1))
+    cov / (s1 * s2)
+
+  }
+
   def fromColumns[RX <: AnyRef: ST: ORD, CX <: AnyRef: ST: ORD](
       f: Frame[RX, CX, Double],
       main: String = "",
